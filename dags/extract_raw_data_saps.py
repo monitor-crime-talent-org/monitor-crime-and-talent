@@ -7,6 +7,9 @@ from airflow.operators.python import PythonOperator, ShortCircuitOperator
 
 
 from bs4 import BeautifulSoup
+import geopandas as gpd
+import pandas as pd
+from pathlib import Path
 import requests
 import pendulum
 import hashlib
@@ -30,6 +33,18 @@ DEFAULT_ARGS = {
     "email_on_failure": True,
     "email": ["aneledindili4@gmail.com"],
 }
+
+crime_types_to_remove = [
+    '17 Community reported serious Crime',
+    'Contact crime (Crimes against the person)',
+    'Contact-related Crime',
+    'Property-related Crime',
+    'Other serious Crime',
+    'TRIO Crime',
+    'Crime detected as a result of police action',
+    'Sexual offences',
+    'Drug-related crime'
+]
 
 
 
@@ -79,6 +94,55 @@ def download_raw_data(**ctx):
     log.info(f"Downloadded {filename} to {file_path}")
     return str(file_path)
 
+def clean_data(**ctx):
+    folder = Path("/opt/airflow/data/raw/saps")
+    excel_file = next(folder.glob("*.xls*"))
+
+    if not excel_file:
+        raise FileNotFoundError(f"No Excel files found in {folder}")
+    
+
+    crime_data = pd.read_excel(excel_file, sheet_name="RAW Data", header=2)
+    crime_data.columns = (
+    crime_data.columns
+    .str.strip()
+    .str.replace("\n", " ")
+    .str.replace(" ", "_")
+)
+    crime_data["Station"] = crime_data["Station"].astype(str)
+    crime_data = crime_data[crime_data["Station"].str.contains("[A-Za-z]", na=False)]
+    count_col = [c for c in crime_data.columns if 'October_2025' in str(c)][0] # <-- will deal with this later
+    crime_data_clean = crime_data[['Station', 'District', 'Crime_Category', count_col, 'National_contribution_placement', 'Provincial_contribution_placement', 'Count_direction']].copy()
+    crime_data_clean.columns = ['Station', 'District', 'Crime_Type', 'Crime_Count', 'National_placement', 'Provincial_placement', 'Count_direction']
+    crime_data_clean['Station'] = crime_data_clean['Station'].str.strip().str.upper()
+    crime_data_clean = crime_data_clean[
+    ~crime_data_clean['Crime_Type'].isin(crime_types_to_remove)
+]
+    crime_data_clean = crime_data_clean.dropna(subset=['Crime_Type'])
+
+    return crime_data_clean
+
+def load_saps_shapefile(**ctx):
+    folder = Path("../data/raw")
+    saps_shapefile = next(folder.glob("*.shp*"))
+    station_data = gpd.read_file(saps_shapefile)
+
+    return station_data
+
+def merge_tables(**ctx):
+    ti = ctx["ti"]
+
+    df = ti.xcom_pull(task_ids="clean_data")
+    geoDf = ti.xcom_pull(task_ids="load_shapefile")
+
+    df = df.rename(columns={"Station": "Station_name"})
+    geoDf = geoDf.rename(columns={"COMPNT_NM": "Station_name"})
+
+    merged = df.merge(geoDf, on="Station_name", how="left")
+
+    return merged
+
+
 with DAG(
     dag_id='saps_crime_stats',
     default_args=DEFAULT_ARGS,
@@ -92,5 +156,38 @@ with DAG(
         python_callable=download_raw_data,
         provide_context=True
     )
+    clean_data_task = PythonOperator(
+        task_id='clean_data',
+        python_callable=clean_data,
+        provide_context=True)
+    load_shape_task = PythonOperator(
+        task_id='load_saps_shapefile',
+        python_callable=load_saps_shapefile,
+        provide_context=True)
+    merge_task = PythonOperator(task_id='merge_tables', python_callable=merge_tables, provide_context=True)
+    download_task >> clean_data_task >> merge_task
+    load_shape_task >> merge_task
 
+
+
+
+
+def build_mapping(**ctx):
+    crime_data_stations = crime_data_clean["Station"].unique().tolist()
+    shapefile_station_name = station_data["COMPNT_NM"].unique().tolist()
+
+    mapping = {}
+    unmatched = []
+    for cds in crime_data_stations:
+        res = process.extractOne(cds, shapefile_station_name, scorer=fuzz_token_ration)
+        if res and res[1] >= 90:
+            mapping[cds] = res[0]
+        else:
+            unmatched.append((cds, res))
+    log.info(f"Matched: {len(mapping)}")
+    log.info(f"Unmatched: {len(unmatched)}")
+    for name, res in unmatched[:]:
+        log.info(f"{name!r:35s} → best: {res}")
+    
+    crime_data_stations["Stations"] = crime_data_stations["Stations"].map(mapping).fillna(crime_data_stations["Stations"])
 
