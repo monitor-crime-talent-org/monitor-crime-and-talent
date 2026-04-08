@@ -11,7 +11,11 @@
   
 ---
 
-##  What It Does
+##  My Process
+
+- Extracted raw data from excel file for quarterly crime stats and shapefile of station locations from SAPS.
+- Cleaned the excel and merged its dataframe with station locations.
+- 
 
 
 
@@ -85,6 +89,8 @@
 ## ▶️ How to Run
 
 ```bash
-git clone 
-cd 
-docker-compose up              
+git clone https://github.com/Anele-e/monitor-crime-and-talent.git
+cd monitor-crime-and-talent-1
+docker-compose up
+```
+

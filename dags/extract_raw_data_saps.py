@@ -30,8 +30,8 @@ DEFAULT_ARGS = {
     "owner": "crime-talent",
     "retries": 2,
     "retry_delay": timedelta(minutes=10),
-    "email_on_failure": True,
-    "email": ["aneledindili4@gmail.com"],
+    # "email_on_failure": True,
+    # "email": ["aneledindili4@gmail.com"],
 }
 
 crime_types_to_remove = [
@@ -50,7 +50,6 @@ crime_types_to_remove = [
 
 def download_raw_data(**ctx):
     
-
     response = requests.get(URL, verify=False, timeout=60)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, 'html.parser')
@@ -79,27 +78,38 @@ def download_raw_data(**ctx):
     
     file_url = spreadsheet_download_link if spreadsheet_download_link.startswith('http') else f"https://www.saps.gov.za/services/{spreadsheet_download_link}"
     filename = os.path.basename(spreadsheet_download_link)
-    file_path = os.path.join(RAW_DIR, filename)
+    file_path = RAW_DIR / filename
 
-    os.makedirs(RAW_DIR, exist_ok=True)
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
 
     log.info(f"starting download from {file_url}")
 
-    with requests.get(file_url, stream=True, verify=False) as r:
+    with requests.get(file_url, stream=True, verify=False, timeout=60) as r:
         r.raise_for_status()
+        content_length = r.headers.get('Content-Length')
         with open(file_path, "wb") as f:
+            downloaded = 0
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
+                downloaded += len(chunk)
+        if content_length and downloaded != int(content_length):
+            raise ValueError(f"Download incomplete: expected {content_length}, and got {downloaded}")
+
+    try:
+        pd.ExcelFile(file_path)
+    except Exception as e:
+        log.error(f"Download error: {e} for file {filename}")
+        os.remove(file_path)
+        raise ValueError("Downloaded file is not a valid Excel file: {e}")
     
-    log.info(f"Downloadded {filename} to {file_path}")
+    log.info(f"Downloadded {filename} to {file_path} (size: {downloaded} bytes)")
     return str(file_path)
 
 def clean_data(**ctx):
-    folder = Path("/opt/airflow/data/raw/saps")
-    excel_file = next(folder.glob("*.xls*"))
+    excel_file = next(RAW_DIR.glob("*.xls*"))
 
     if not excel_file:
-        raise FileNotFoundError(f"No Excel files found in {folder}")
+        raise FileNotFoundError(f"No Excel files found in {RAW_DIR}")
     
 
     crime_data = pd.read_excel(excel_file, sheet_name="RAW Data", header=2)
@@ -120,27 +130,38 @@ def clean_data(**ctx):
 ]
     crime_data_clean = crime_data_clean.dropna(subset=['Crime_Type'])
 
-    return crime_data_clean
+    output_path = RAW_DIR / "cleaned_crime_data.parquet"
+    crime_data_clean.to_parquet(output_path, index=False)  
+
+    return str(output_path)
 
 def load_saps_shapefile(**ctx):
-    folder = Path("../data/raw")
-    saps_shapefile = next(folder.glob("*.shp*"))
+    # folder = Path("/opt/airflow/data/raw")
+    saps_shapefile = next(RAW_DIR.glob("*.shp*"))
     station_data = gpd.read_file(saps_shapefile)
 
-    return station_data
+    output_path = RAW_DIR / "shapefile.parquet"
+    station_data.to_parquet(output_path, index=False)
+
+    return str(output_path)
 
 def merge_tables(**ctx):
     ti = ctx["ti"]
 
-    df = ti.xcom_pull(task_ids="clean_data")
-    geoDf = ti.xcom_pull(task_ids="load_shapefile")
+    cleaned_file = ti.xcom_pull(task_ids="clean_data")
+    station_data_in_parquet = ti.xcom_pull(task_ids="load_saps_shapefile")
+    crime_data = pd.read_parquet(cleaned_file)
 
-    df = df.rename(columns={"Station": "Station_name"})
-    geoDf = geoDf.rename(columns={"COMPNT_NM": "Station_name"})
+    station_data_geodf = pd.read_parquet(station_data_in_parquet)
 
-    merged = df.merge(geoDf, on="Station_name", how="left")
+    crime_data = crime_data.rename(columns={"Station": "Station_name"})
+    station_data_geodf = station_data_geodf.rename(columns={"COMPNT_NM": "Station_name"})
 
-    return merged
+    merged = crime_data.merge(station_data_geodf, on="Station_name", how="left")
+    output = RAW_DIR / "merged_table.parquet"
+    merged.to_parquet(output, index=False)
+
+    return str(output)
 
 
 with DAG(
@@ -167,27 +188,3 @@ with DAG(
     merge_task = PythonOperator(task_id='merge_tables', python_callable=merge_tables, provide_context=True)
     download_task >> clean_data_task >> merge_task
     load_shape_task >> merge_task
-
-
-
-
-
-def build_mapping(**ctx):
-    crime_data_stations = crime_data_clean["Station"].unique().tolist()
-    shapefile_station_name = station_data["COMPNT_NM"].unique().tolist()
-
-    mapping = {}
-    unmatched = []
-    for cds in crime_data_stations:
-        res = process.extractOne(cds, shapefile_station_name, scorer=fuzz_token_ration)
-        if res and res[1] >= 90:
-            mapping[cds] = res[0]
-        else:
-            unmatched.append((cds, res))
-    log.info(f"Matched: {len(mapping)}")
-    log.info(f"Unmatched: {len(unmatched)}")
-    for name, res in unmatched[:]:
-        log.info(f"{name!r:35s} → best: {res}")
-    
-    crime_data_stations["Stations"] = crime_data_stations["Stations"].map(mapping).fillna(crime_data_stations["Stations"])
-
