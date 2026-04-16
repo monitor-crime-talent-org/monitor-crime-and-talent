@@ -1,10 +1,12 @@
 from datetime import datetime, timedelta
 from pathlib import Path
+import zipfile
 from airflow import DAG
 from airflow.operators.empty import EmptyOperator
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.operators.python import PythonOperator, ShortCircuitOperator
-
+import re
+from datetime import datetime
 
 from bs4 import BeautifulSoup
 import geopandas as gpd
@@ -28,7 +30,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 DEFAULT_ARGS = {
     "owner": "crime-talent",
-    "retries": 2,
+    "retries": 3,
     "retry_delay": timedelta(minutes=10),
     # "email_on_failure": True,
     # "email": ["aneledindili4@gmail.com"],
@@ -46,9 +48,78 @@ crime_types_to_remove = [
     'Drug-related crime'
 ]
 
+Violent_Crime = ["Murder", "Attempted murder", "Culpable homicide", "Assault with the intent to inflict grievous bodily harm", "Common assault",
+"Robbery with aggravating circumstances", "Common robbery",
+"Carjacking", "Truck hijacking", "Robbery of cash in transit",
+"Bank robbery", "Robbery at residential premises", "Robbery at non-residential premises", "Public violence"]
+Sexual_Offences = ["Rape", "Sexual assault", "Attempted sexual offences", "Contact sexual offences", "Sexual offences detected as a result of police action"]
+Theft_and_Burglary = ["Burglary at residential premises", "Burglary at non-residential premises", "Shoplifting", "Stock-theft", "Theft of motor vehicle and motorcycle", "Theft out of or from motor vehicle", "All theft not mentioned elsewhere"]
+Crimes_against_Children = ["Neglect and ill-treatment of children", "Kidnapping", "Abduction"]
+Property_Damage = ["Arson", "Malicious damage to property"]
+Commercial_or_Financial = ["Commercial crime"]
+Police_Action = ["Driving under the influence of alcohol or drugs", "Illegal possession of firearms and ammunition"]
+Social_Crimes = ["Crimen injuria"]
+
+crime_groups = {
+    "Violent Crime": Violent_Crime,
+    "Sexual Offences": Sexual_Offences,
+    "Theft and Burglary": Theft_and_Burglary,
+    "Crimes Against Children": Crimes_against_Children,
+    "Property Damage": Property_Damage,
+    "Commercial Crime": Commercial_or_Financial,
+    "Police Action": Police_Action,
+    "Social Crime": Social_Crimes
+}
+
+def map_crime_group(crime):
+    for group, crimes in crime_groups.items():
+        if crime in crimes:
+            return group
+    return "Other"
+
+
+
+def get_latest_quarter_column(df):
+    months = ['January', 'February', 'March', 'April', 'May', 'June',
+              'July', 'August', 'September', 'October', 'November', 'December']
+    month_pattern = '|'.join(months)
+
+    pattern = re.compile(
+        rf'(?P<start_month>{month_pattern})_(?P<start_year>\d{{4}})_to_+?(?P<end_month>{month_pattern})_(?P<end_year>\d{{4}})',
+        re.IGNORECASE
+    )
+
+    latest_col = None
+    latest_end_date = None
+
+    for col in df.columns:
+        col_str = str(col)
+        match = pattern.search(col_str)
+        if match:
+            end_month = match.group('end_month').capitalize()
+            end_year = int(match.group('end_year'))
+
+            try:
+                end_date = datetime.strptime(f"{end_month} {end_year}", "%B %Y")
+            except ValueError:
+                continue
+
+            if latest_end_date is None or end_date > latest_end_date:
+                latest_end_date = end_date
+                latest_col = col
+                
+    if latest_col is None:
+        raise ValueError("No quarterly column found matching pattern 'Month_YYYY_to_Month_YYYY'")
+
+    return latest_col
+
 
 
 def download_raw_data(**ctx):
+
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+        }
     
     response = requests.get(URL, verify=False, timeout=60)
     response.raise_for_status()
@@ -92,27 +163,76 @@ def download_raw_data(**ctx):
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
                 downloaded += len(chunk)
+            f.flush()
+            os.fsync(f.fileno())
         if content_length and downloaded != int(content_length):
             raise ValueError(f"Download incomplete: expected {content_length}, and got {downloaded}")
 
-    try:
-        pd.ExcelFile(file_path)
-    except Exception as e:
-        log.error(f"Download error: {e} for file {filename}")
-        os.remove(file_path)
-        raise ValueError("Downloaded file is not a valid Excel file: {e}")
+    # try:
+    #     test_file = pd.read_excel(file_path, sheet_name="RAW Data", header=2, nrows=5)
+    # except Exception as e:
+    #     log.error(f"Download error: {e} for file {filename}")
+    #     os.remove(file_path)
+    #     raise ValueError("Downloaded file is not a valid Excel file: {e}")
+    validate_excel(file_path)
+    # clean_file_path = clean_excel(file_path)
     
-    log.info(f"Downloadded {filename} to {file_path} (size: {downloaded} bytes)")
+    log.info(f"Downloadded {filename} and sanitized file created: {file_path}")
     return str(file_path)
 
-def clean_data(**ctx):
-    excel_file = next(RAW_DIR.glob("*.xls*"))
-
-    if not excel_file:
-        raise FileNotFoundError(f"No Excel files found in {RAW_DIR}")
+def validate_excel(file_path):
+    try:
+        with zipfile.ZipFile(file_path) as zf:
+            corrupt = zf.testzip()
+            if corrupt:
+                raise ValueError(f"Excel file is corrupted: {corrupt}")
+    except Exception as e:
+        raise ValueError(f"Excel file validation failed: {e}") 
     
+    try: 
+        pd.read_excel(file_path, sheet_name="RAW Data")
+        return True
+    except Exception as e:
+        raise ValueError(f"Invalid Excel file: {e}")
 
-    crime_data = pd.read_excel(excel_file, sheet_name="RAW Data", header=2)
+# def clean_excel(input_path):
+#     try:
+#         df = pd.read_excel(input_path, sheet_name="RAW Data", header=2)
+
+#         clean_path = str(input_path).replace(".xlsx", "_clean.xlsx")
+
+#         with pd.ExcelWriter(clean_path, engine="openpyxl") as writer:
+#             df.to_excel(writer, sheet_name="RAW Data", index=False, header=True)
+
+#         return clean_path
+
+    # except Exception as e:
+    #     raise ValueError(f"Raw Data Excel sheet sanitization failed: {e}")
+
+def clean_data(**ctx):
+    output_path = RAW_DIR / "cleaned_crime_data.parquet"
+    if output_path.exists():
+        log.info(f"Cleaned data already exists at {output_path}, skipping reprocessing.")
+        return str(output_path)
+    ti = ctx["ti"]
+   
+    excel_file = ti.xcom_pull(task_ids="download_raw_data")
+    if not excel_file:
+        raise ValueError("No file path received from download_raw_data")
+    # excel_file = next(RAW_DIR.glob("*.xls*"))
+
+    # if not excel_file:
+    #     raise FileNotFoundError(f"No Excel files found in {RAW_DIR}")
+
+    excel_path = Path(excel_file)
+    if not excel_path.exists():
+        raise FileNotFoundError(f"Downloaded file not found: {excel_path}")    
+    try:
+        crime_data = pd.read_excel(excel_path, sheet_name="RAW Data", header=2)
+    except (zipfile.BadZipFile, Exception) as e:
+        excel_path.unlink(missing_ok=True)
+        raise RuntimeError(f"Corrupted Excel file {excel_path} deleted. "
+                           f"Re-run the DAG to download again.") from e
     crime_data.columns = (
     crime_data.columns
     .str.strip()
@@ -121,7 +241,11 @@ def clean_data(**ctx):
 )
     crime_data["Station"] = crime_data["Station"].astype(str)
     crime_data = crime_data[crime_data["Station"].str.contains("[A-Za-z]", na=False)]
-    count_col = [c for c in crime_data.columns if 'October_2025' in str(c)][0] # <-- will deal with this later
+    
+    latest_quarter_col = get_latest_quarter_column(crime_data)
+    count_col = latest_quarter_col
+    # count_col = [c for c in crime_data.columns if 'October_2025' in str(c)][0]
+    
     crime_data_clean = crime_data[['Station', 'District', 'Crime_Category', count_col, 'National_contribution_placement', 'Provincial_contribution_placement', 'Count_direction']].copy()
     crime_data_clean.columns = ['Station', 'District', 'Crime_Type', 'Crime_Count', 'National_placement', 'Provincial_placement', 'Count_direction']
     crime_data_clean['Station'] = crime_data_clean['Station'].str.strip().str.upper()
@@ -130,36 +254,69 @@ def clean_data(**ctx):
 ]
     crime_data_clean = crime_data_clean.dropna(subset=['Crime_Type'])
 
-    output_path = RAW_DIR / "cleaned_crime_data.parquet"
-    crime_data_clean.to_parquet(output_path, index=False)  
+    if "Station" in crime_data_clean.columns:
+        crime_data_clean = crime_data_clean.rename(columns={"Station": "Station_name"})
+    else:
+        raise KeyError(f"'Station' column not found. Available columns: {crime_data_clean.columns}")
+    crime_data_clean['Crime_Group'] = crime_data_clean['Crime_Type'].apply(map_crime_group)
+
+    grouped = crime_data_clean.groupby(
+    ["Station_name", "Crime_Group"]
+    )["Crime_Count"].sum().reset_index()
+    grouped.head()
+    pivot = grouped.pivot(index='Station_name', columns='Crime_Group', values='Crime_Count').fillna(0)
+
+    
+    pivot.to_parquet(output_path, index=True)  
 
     return str(output_path)
 
-def load_saps_shapefile(**ctx):
-    # folder = Path("/opt/airflow/data/raw")
-    saps_shapefile = next(RAW_DIR.glob("*.shp*"))
-    station_data = gpd.read_file(saps_shapefile)
 
+def load_saps_shapefile(**ctx):
     output_path = RAW_DIR / "shapefile.parquet"
-    station_data.to_parquet(output_path, index=False)
+
+    if output_path.exists():
+        log.info(f"Shapefile already processed and saved at {output_path}, skipping reprocessing.")
+        return str(output_path)
+    
+    saps_shapefile = next(RAW_DIR.glob("*.shp") , None)
+    if not saps_shapefile:
+        raise FileNotFoundError("No shapefile found in raw directory")
+    
+    station_data = gpd.read_file(saps_shapefile)
+    station_data = station_data.rename(columns={"COMPNT_NM": "Station_name"})
+    station_data = station_data.drop_duplicates(subset=["Station_name"])
+    geom = station_data[['Station_name', 'geometry']].set_index('Station_name')
+
+
+    geom.to_parquet(output_path, index=True)
 
     return str(output_path)
 
 def merge_tables(**ctx):
+    output = RAW_DIR / "merged_table.parquet"
+    if output.exists():
+        log.info(f"Merged table already exists at {output}, skipping reprocessing.")
+        return str(output)
+    
     ti = ctx["ti"]
 
     cleaned_file = ti.xcom_pull(task_ids="clean_data")
-    station_data_in_parquet = ti.xcom_pull(task_ids="load_saps_shapefile")
+    station_data = ti.xcom_pull(task_ids="load_saps_shapefile")
+
     crime_data = pd.read_parquet(cleaned_file)
+    station_data_geodf = gpd.read_parquet(station_data)
 
-    station_data_geodf = pd.read_parquet(station_data_in_parquet)
+    # crime_data = crime_data.set_index("Station_name")
+    # station_data_geodf = station_data_geodf.set_index("Station_name")
 
-    crime_data = crime_data.rename(columns={"Station": "Station_name"})
-    station_data_geodf = station_data_geodf.rename(columns={"COMPNT_NM": "Station_name"})
 
-    merged = crime_data.merge(station_data_geodf, on="Station_name", how="left")
+    gdf = crime_data.join(station_data_geodf).reset_index()
+    gdf = gpd.GeoDataFrame(gdf, geometry='geometry')
+    gdf.crs = 'EPSG:4326'
+    # sample_gdf = gdf.sample(100, random_state=42)
     output = RAW_DIR / "merged_table.parquet"
-    merged.to_parquet(output, index=False)
+    gdf.to_parquet(output, index=False)
 
     return str(output)
 
@@ -181,10 +338,15 @@ with DAG(
         task_id='clean_data',
         python_callable=clean_data,
         provide_context=True)
-    load_shape_task = PythonOperator(
+    load_shapefile_task = PythonOperator(
         task_id='load_saps_shapefile',
         python_callable=load_saps_shapefile,
         provide_context=True)
-    merge_task = PythonOperator(task_id='merge_tables', python_callable=merge_tables, provide_context=True)
+
+    merge_task = PythonOperator(
+        task_id='merge_tables',
+        python_callable=merge_tables,
+        provide_context=True)
     download_task >> clean_data_task >> merge_task
-    load_shape_task >> merge_task
+    load_shapefile_task >> merge_task
+    

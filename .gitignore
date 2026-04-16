@@ -38,3 +38,4 @@ htmlcov/
 .vscode/
 data/raw/saps/merged_table.parquet
 data/raw/saps/cleaned_crime_data.parquet
+data/raw/saps/shapefile.parquet
