@@ -93,7 +93,12 @@ services:
     volumes:
       - .:/home/runner/work/monitor-crime-and-talent/monitor-crime-and-talent
       - ./.env:/home/runner/work/monitor-crime-and-talent/monitor-crime-and-talent/.env
-    entrypoint: ["/bin/bash", "-c", "./config.sh --url $$URL --token $$TOKEN --name $$RUNNER_NAME --labels $$RUNNER_LABELS --unattended --replace && ./run.sh"]
+    # Use the provided startup script for the official runner
+    entrypoint: >
+      /bin/bash -c "
+      rm -f .runner .credentials .credentials_rsaparams .service;
+      ./config.sh --url $$URL --token $$TOKEN --name $$RUNNER_NAME --labels $$RUNNER_LABELS --unattended --replace && ./run.sh
+      "
     networks:
       - crime-net
 
