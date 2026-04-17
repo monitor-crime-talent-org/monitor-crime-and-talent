@@ -12,6 +12,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       
+      - name: Ensure Docker Network Exists
+        run: |
+          docker network create tunelnet || true
+
       - name: Build and Restart Services
         run: |
           # Rebuild and restart ONLY the application services.

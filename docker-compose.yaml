@@ -67,6 +67,9 @@ services:
       airflow-init:
         condition: service_completed_successfully
     restart: unless-stopped
+    networks:
+      - crime-net
+      - tunelnet
 
   # 4. AIRFLOW SCHEDULER
   airflow-scheduler:
@@ -110,3 +113,5 @@ volumes:
 networks:
   crime-net:
     driver: bridge
+  tunelnet:
+    external: true
