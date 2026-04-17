@@ -12,9 +12,6 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
-    # _PIP_ADDITIONAL_REQUIREMENTS: >-
-    #   geopandas pandas rapidfuzz sqlalchemy psycopg2-binary
-    #   camelot-py[cv] beautifulsoup4 requests openpyxl pyarrow
   volumes:
     - ./dags:/opt/airflow/dags
     - ./data:/opt/airflow/data
@@ -54,9 +51,7 @@ services:
     command: >
       bash -c "
       set -e
-
       airflow db migrate
-
       airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com || true
       "
     restart: "no"
@@ -72,7 +67,7 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
-    # 4. AIRFLOW SCHEDULER
+  # 4. AIRFLOW SCHEDULER
   airflow-scheduler:
     <<: *airflow-common
     command: scheduler
@@ -80,6 +75,35 @@ services:
       airflow-init:
         condition: service_completed_successfully
     restart: unless-stopped
+
+  # 5. DEPLOYMENT AGENT (Secure Poller)
+  # This agent checks for updates on the 'main' branch every 60 seconds.
+  # It is safer for public repositories because it only pulls from your authoritative source.
+  deploy-agent:
+    image: docker:latest
+    restart: always
+    volumes:
+      - //./pipe/docker_engine://./pipe/docker_engine
+      - .:/app
+    working_dir: /app
+    entrypoint: >
+      sh -c "
+      apk add --no-cache git &&
+      git config --global --add safe.directory /app &&
+      while true; do
+        git fetch origin main > /dev/null 2>&1 &&
+        LOCAL=\$$(git rev-parse HEAD) &&
+        REMOTE=\$$(git rev-parse origin/main) &&
+        if [ \"\$$LOCAL\" != \"\$$REMOTE\" ]; then
+          echo \"Changes detected. Redeploying...\" &&
+          git pull origin main &&
+          docker compose up -d --build;
+        fi;
+        sleep 60;
+      done
+      "
+    networks:
+      - crime-net
 
 volumes:
   postgres_data:

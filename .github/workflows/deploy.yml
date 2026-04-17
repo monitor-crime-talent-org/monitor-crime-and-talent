@@ -1,0 +1,19 @@
+name: Local Auto Deploy
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    # Only run on runners with the 'deploy' label
+    if: contains(github.event.head_commit.message, '') # Run on every push
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Build and Restart Services
+        run: |
+          # Use the mounted host docker to redeploy
+          docker-compose down
+          docker-compose up -d --build
