@@ -76,9 +76,11 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
-  # 5. OFFICIAL GITHUB ACTIONS RUNNER
+  # 5. OFFICIAL GITHUB ACTIONS RUNNER (Customized)
   deploy-agent:
-    image: ghcr.io/actions/actions-runner:latest
+    build:
+      context: ./infra
+      dockerfile: runner.Dockerfile
     restart: always
     environment:
       URL: "https://github.com/monitor-crime-talent-org/monitor-crime-and-talent"
