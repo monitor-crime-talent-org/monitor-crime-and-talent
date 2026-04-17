@@ -14,6 +14,11 @@ jobs:
       
       - name: Build and Restart Services
         run: |
+          # Propagate existing environment variables to the checked-out directory
+          echo "AIRFLOW_UID=${AIRFLOW_UID}" >> .env
+          echo "AIRFLOW__CORE__FERNET_KEY=${AIRFLOW__CORE__FERNET_KEY}" >> .env
+          echo "RUNNER_TOKEN=${TOKEN}" >> .env
+          
           # Use the mounted host docker to redeploy
           docker compose down
           docker compose up -d --build

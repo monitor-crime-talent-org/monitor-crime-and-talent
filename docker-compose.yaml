@@ -88,9 +88,10 @@ services:
       RUNNER_NAME: "official-deploy-runner"
       RUNNER_LABELS: "deploy,self-hosted"
       RUNNER_ALLOW_RUNASROOT: "true"
-      DOCKER_HOST: "npipe:////./pipe/docker_engine"
+      # Use the standard Linux socket (Docker Desktop maps this on Windows)
+      DOCKER_HOST: "unix:///var/run/docker.sock"
     volumes:
-      - //./pipe/docker_engine://./pipe/docker_engine
+      - /var/run/docker.sock:/var/run/docker.sock
       - .:/home/runner/work/monitor-crime-and-talent
     entrypoint: ["/bin/bash", "-c", "./config.sh --url $$URL --token $$TOKEN --name $$RUNNER_NAME --labels $$RUNNER_LABELS --unattended --replace && ./run.sh"]
     user: root
