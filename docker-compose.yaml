@@ -76,33 +76,21 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
-  # 5. DEPLOYMENT AGENT (Secure Poller)
-  # This agent checks for updates on the 'main' branch every 60 seconds.
-  # It is safer for public repositories because it only pulls from your authoritative source.
+  # 5. OFFICIAL GITHUB ACTIONS RUNNER
   deploy-agent:
-    image: docker:latest
+    image: ghcr.io/actions/actions-runner:latest
     restart: always
+    environment:
+      URL: "https://github.com/monitor-crime-talent-org/monitor-crime-and-talent"
+      TOKEN: "${RUNNER_TOKEN}"
+      RUNNER_NAME: "official-deploy-runner"
+      RUNNER_LABELS: "deploy,self-hosted"
+      RUNNER_ALLOW_RUNASROOT: "true"
     volumes:
       - //./pipe/docker_engine://./pipe/docker_engine
-      - .:/app
-    working_dir: /app
-    entrypoint: >
-      sh -c "
-      apk add --no-cache git &&
-      git config --global --add safe.directory /app &&
-      git remote set-url origin https://github.com/monitor-crime-talent-org/monitor-crime-and-talent.git &&
-      while true; do
-        git fetch origin main > /dev/null 2>&1 &&
-        LOCAL=\$$(git rev-parse HEAD) &&
-        REMOTE=\$$(git rev-parse origin/main) &&
-        if [ \"\$$LOCAL\" != \"\$$REMOTE\" ]; then
-          echo \"Changes detected. Redeploying...\" &&
-          git pull origin main &&
-          docker compose up -d --build;
-        fi;
-        sleep 60;
-      done
-      "
+      - .:/home/runner/work/monitor-crime-and-talent
+    entrypoint: ["/bin/bash", "-c", "./config.sh --url $$URL --token $$TOKEN --name $$RUNNER_NAME --labels $$RUNNER_LABELS --unattended --replace && ./run.sh"]
+    user: root
     networks:
       - crime-net
 
