@@ -9,4 +9,4 @@ USER airflow
 RUN pip install --no-cache-dir \
     geopandas pandas rapidfuzz sqlalchemy psycopg2-binary \
     camelot-py[cv] beautifulsoup4 requests openpyxl pyarrow \
-    bcrypt
+    bcrypt geoalchemy2

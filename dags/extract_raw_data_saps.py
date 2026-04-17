@@ -5,6 +5,8 @@ from airflow import DAG
 from airflow.operators.empty import EmptyOperator
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.operators.python import PythonOperator, ShortCircuitOperator
+from sqlalchemy import create_engine, text
+from geoalchemy2 import Geometry
 import re
 from datetime import datetime
 
@@ -25,6 +27,7 @@ log = logging.getLogger(__name__)
 RAW_DIR    = Path("/opt/airflow/data/raw/saps")
 HASH_STORE = Path("/opt/airflow/data/.saps_hashes.json")
 URL = "https://www.saps.gov.za/services/crimestats.php"
+DB_CONNECTION_STRING = "postgresql+psycopg2://anele:anele123@postgres/crime_talent_db"
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -313,12 +316,70 @@ def merge_tables(**ctx):
 
     gdf = crime_data.join(station_data_geodf).reset_index()
     gdf = gpd.GeoDataFrame(gdf, geometry='geometry')
-    gdf.crs = 'EPSG:4326'
+    gdf = gdf.set_crs('EPSG:4326')
     # sample_gdf = gdf.sample(100, random_state=42)
     output = RAW_DIR / "merged_table.parquet"
     gdf.to_parquet(output, index=False)
 
     return str(output)
+
+def load_to_postgis(**ctx):
+    ti = ctx["ti"]
+    merged_file = ti.xcom_pull(task_ids="merge_tables", key="return_value")
+
+    if not merged_file:
+        raise ValueError("No merged file path received from merge_tables")
+    merged_path = Path(merged_file)
+    if not merged_path.exists():
+        raise FileNotFoundError(f"Merged file not found: {merged_path}")
+    
+    gdf = gpd.read_parquet(merged_path)
+
+    if gdf.empty:
+        raise ValueError("Merged GeoDataFrame is empty, cannot load to PostGIS")
+    
+    if "geometry" not in gdf.columns:
+        raise KeyError("Merged data does not contain 'geometry' column")
+    
+    missing_geometry = gdf['geometry'].isnull().sum()
+    if missing_geometry:
+        log.warning(f"{missing_geometry} records have missing geometry and will load with NULL geometry in PostGIS")
+
+    if gdf.crs is None:
+        log.warning("CRS not defined for GeoDataFrame, defaulting to EPSG:4326")
+        gdf = gdf.set_crs('EPSG:4326')
+    elif gdf.crs.to_epsg() != 4326:
+        log.info(f"Reprojecting GeoDataFrame from {gdf.crs} to EPSG:4326")
+        gdf = gdf.to_crs('EPSG:4326')
+
+    gdf.columns = (
+        gdf.columns
+        .str.strip().str.lower().str.replace(" ", "_")
+        )
+    log.info("Columns to load: %s", gdf.columns.tolist())
+
+    gdf["ingested_at"] = datetime.utcnow()
+
+    engine = create_engine(DB_CONNECTION_STRING)
+
+    with engine.begin() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis"))
+
+    gdf.to_postgis(
+        name="saps_crime_stats",
+        con=engine,
+        if_exists="replace", 
+        index=False,
+        dtype={"geometry": Geometry("POINT", srid=4326)},
+        method="multi",
+        chunksize=1000
+    )
+
+    with engine.begin() as conn:
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_saps_crime_stats_geometry ON saps_crime_stats USING GIST(geometry)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_saps_crime_stats_station_name ON saps_crime_stats(station_name)"))
+
+    log.info("Data successfully loaded to PostGIS table 'saps_crime_stats'")
 
 
 with DAG(
@@ -347,6 +408,11 @@ with DAG(
         task_id='merge_tables',
         python_callable=merge_tables,
         provide_context=True)
+    load_to_postgis_task = PythonOperator(
+        task_id='load_to_postgis',
+        python_callable=load_to_postgis,
+        provide_context=True
+    )
     download_task >> clean_data_task >> merge_task
     load_shapefile_task >> merge_task
-    
+    merge_task >> load_to_postgis_task
