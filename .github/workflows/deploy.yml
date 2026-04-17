@@ -14,6 +14,6 @@ jobs:
       
       - name: Build and Restart Services
         run: |
-          # Use the mounted host docker and the propagated .env file to redeploy
-          docker compose --env-file .env down
-          docker compose --env-file .env up -d --build
+          # Rebuild and restart ONLY the application services.
+          # This prevents the 'deploy-agent' from killing itself mid-deployment.
+          docker compose up -d --build postgres airflow-init airflow-webserver airflow-scheduler
