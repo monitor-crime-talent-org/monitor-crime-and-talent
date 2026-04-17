@@ -314,9 +314,17 @@ def merge_tables(**ctx):
     # station_data_geodf = station_data_geodf.set_index("Station_name")
 
 
-    gdf = crime_data.join(station_data_geodf).reset_index()
-    gdf = gpd.GeoDataFrame(gdf, geometry='geometry')
-    gdf = gdf.set_crs('EPSG:4326')
+    # gdf = crime_data.join(station_data_geodf).reset_index()
+    gdf = station_data_geodf.merge(
+    crime_data,
+    left_index=True,
+    right_index=True,
+    how="inner"
+)
+    if gdf.crs is None:
+        gdf = gdf.set_crs("EPSG:4326")
+    # gdf = gpd.GeoDataFrame(gdf, geometry='geometry')
+    # gdf = gdf.set_crs('EPSG:4326')
     # sample_gdf = gdf.sample(100, random_state=42)
     output = RAW_DIR / "merged_table.parquet"
     gdf.to_parquet(output, index=False)
