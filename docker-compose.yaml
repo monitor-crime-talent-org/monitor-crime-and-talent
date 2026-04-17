@@ -82,6 +82,7 @@ services:
       context: ./infra
       dockerfile: runner.Dockerfile
     restart: always
+    user: root
     environment:
       URL: "https://github.com/monitor-crime-talent-org/monitor-crime-and-talent"
       TOKEN: "${RUNNER_TOKEN}"
@@ -91,8 +92,8 @@ services:
       # TCP is the only reliable way for Linux-to-Windows Docker control
       DOCKER_HOST: "tcp://host.docker.internal:2375"
     volumes:
-      - .:/home/runner/_work/monitor-crime-and-talent/monitor-crime-and-talent
-      - ./.env:/home/runner/_work/monitor-crime-and-talent/monitor-crime-and-talent/.env
+      - .:/home/runner/_work/monitor-crime-and-talent
+      - ./.env:/home/runner/_work/monitor-crime-and-talent/.env
     # Use the provided startup script for the official runner
     entrypoint: >
       /bin/bash -c "
