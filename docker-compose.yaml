@@ -91,8 +91,8 @@ services:
       # TCP is the only reliable way for Linux-to-Windows Docker control
       DOCKER_HOST: "tcp://host.docker.internal:2375"
     volumes:
-      - .:/home/runner/work/monitor-crime-and-talent/monitor-crime-and-talent
-      - ./.env:/home/runner/work/monitor-crime-and-talent/monitor-crime-and-talent/.env
+      - .:/home/runner/work/monitor-crime-and-talent
+      - ./.env:/home/runner/work/monitor-crime-and-talent/.env
     # Use the provided startup script for the official runner
     entrypoint: >
       /bin/bash -c "
