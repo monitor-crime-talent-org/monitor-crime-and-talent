@@ -15,5 +15,5 @@ jobs:
       - name: Build and Restart Services
         run: |
           # Use the mounted host docker to redeploy
-          docker-compose down
-          docker-compose up -d --build
+          docker compose down
+          docker compose up -d --build
