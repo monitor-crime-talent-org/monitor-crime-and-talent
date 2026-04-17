@@ -69,7 +69,7 @@ services:
     restart: unless-stopped
     networks:
       - crime-net
-      - tunelnet
+      - tunnelnet
 
   # 4. AIRFLOW SCHEDULER
   airflow-scheduler:
@@ -113,5 +113,5 @@ volumes:
 networks:
   crime-net:
     driver: bridge
-  tunelnet:
+  tunnelnet:
     external: true
