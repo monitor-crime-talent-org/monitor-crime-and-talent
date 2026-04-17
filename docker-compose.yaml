@@ -48,11 +48,18 @@ services:
   # 2. AIRFLOW INIT
   airflow-init:
     <<: *airflow-common
+    user: "0:0"
     command: >
       bash -c "
       set -e
-      airflow db migrate
-      airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com || true
+      # Fix permissions for the mounted volumes
+      mkdir -p /opt/airflow/logs /opt/airflow/dags /opt/airflow/data
+      chown -R 50000:0 /opt/airflow/logs /opt/airflow/dags /opt/airflow/data
+      chmod -R 775 /opt/airflow/logs /opt/airflow/dags /opt/airflow/data
+      
+      # Run as airflow user
+      su airflow -s /bin/bash -c \"airflow db migrate\"
+      su airflow -s /bin/bash -c \"airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com || true\"
       "
     restart: "no"
 
