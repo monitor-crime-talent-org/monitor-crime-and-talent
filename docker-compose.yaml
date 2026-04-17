@@ -86,6 +86,7 @@ services:
       RUNNER_NAME: "official-deploy-runner"
       RUNNER_LABELS: "deploy,self-hosted"
       RUNNER_ALLOW_RUNASROOT: "true"
+      DOCKER_HOST: "npipe:////./pipe/docker_engine"
     volumes:
       - //./pipe/docker_engine://./pipe/docker_engine
       - .:/home/runner/work/monitor-crime-and-talent
