@@ -5,11 +5,11 @@ from airflow import DAG
 from airflow.operators.empty import EmptyOperator
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.operators.python import PythonOperator, ShortCircuitOperator
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, engine, text
 from geoalchemy2 import Geometry
 import re
 from datetime import datetime
-
+from shapely.geometry import MultiPolygon, Polygon, Point
 from bs4 import BeautifulSoup
 import geopandas as gpd
 import pandas as pd
@@ -328,6 +328,7 @@ def merge_tables(**ctx):
     # sample_gdf = gdf.sample(100, random_state=42)
     output = RAW_DIR / "merged_table.parquet"
     gdf.to_parquet(output, index=False)
+    
 
     return str(output)
 
@@ -348,10 +349,19 @@ def load_to_postgis(**ctx):
     
     if "geometry" not in gdf.columns:
         raise KeyError("Merged data does not contain 'geometry' column")
+
+    gdf = gpd.GeoDataFrame(gdf, geometry="geometry")
     
     missing_geometry = gdf['geometry'].isnull().sum()
     if missing_geometry:
-        log.warning(f"{missing_geometry} records have missing geometry and will load with NULL geometry in PostGIS")
+        log.warning(f"{missing_geometry} records have missing geometry and will be dropped.")
+
+    gdf = gdf[gdf["geometry"].notnull()]
+
+    assert gdf.geometry.apply(lambda x: hasattr(x, "geom_type")).all()
+ 
+   
+    # gdf["geometry"] = gdf["geometry"].centroid
 
     if gdf.crs is None:
         log.warning("CRS not defined for GeoDataFrame, defaulting to EPSG:4326")
@@ -360,28 +370,38 @@ def load_to_postgis(**ctx):
         log.info(f"Reprojecting GeoDataFrame from {gdf.crs} to EPSG:4326")
         gdf = gdf.to_crs('EPSG:4326')
 
+    # gdf_proj = gdf.to_crs(epsg=3857)
+    # gdf["geometry"] = gdf_proj.centroid.to_crs(epsg=4326)
+
     gdf.columns = (
         gdf.columns
         .str.strip().str.lower().str.replace(" ", "_")
         )
     log.info("Columns to load: %s", gdf.columns.tolist())
+    log.info("Geometry types: %s", gdf.geometry.geom_type.unique())
 
     gdf["ingested_at"] = datetime.utcnow()
+    gdf = gdf[gdf.is_valid]
 
     engine = create_engine(DB_CONNECTION_STRING)
 
     with engine.begin() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis"))
 
-    gdf.to_postgis(
-        name="saps_crime_stats",
-        con=engine,
-        if_exists="replace", 
-        index=False,
-        dtype={"geometry": Geometry("POINT", srid=4326)},
-        method="multi",
-        chunksize=1000
-    )
+    # from sqlalchemy.engine import Engine
+
+    # assert isinstance(engine, Engine), f"Not a SQLAlchemy engine: {type(engine)}"
+    with engine.begin() as conn:
+
+        gdf.to_postgis(
+            name="saps_crime_stats",
+            con=conn,
+            if_exists="replace", 
+            index=False,
+            # dtype={"geometry": Geometry("GEOMETRY", srid=4326)},
+            # method="multi",
+            chunksize=1000
+        )
 
     with engine.begin() as conn:
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_saps_crime_stats_geometry ON saps_crime_stats USING GIST(geometry)"))
