@@ -1,8 +1,8 @@
 CREATE USER airflow WITH PASSWORD 'airflow';
-CREATE USER anele WITH PASSWORD 'anele123';
+-- CREATE USER anele WITH PASSWORD 'anele123';
 
 CREATE DATABASE airflow_meta OWNER airflow;
-CREATE DATABASE crime_talent_db OWNER anele;
+-- CREATE DATABASE crime_talent_db OWNER anele;
 
 
 \c crime_talent_db
