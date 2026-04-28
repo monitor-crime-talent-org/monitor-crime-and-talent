@@ -4,6 +4,7 @@ x-airflow-common: &airflow-common
   build:
     context: ./infra
     dockerfile: airflow.Dockerfile
+  user: "0:0"
   environment:
     AIRFLOW_UID: "${AIRFLOW_UID}"
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
@@ -12,9 +13,6 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
-    # _PIP_ADDITIONAL_REQUIREMENTS: >-
-    #   geopandas pandas rapidfuzz sqlalchemy psycopg2-binary
-    #   camelot-py[cv] beautifulsoup4 requests openpyxl pyarrow
   volumes:
     - ./dags:/opt/airflow/dags
     - ./data:/opt/airflow/data
@@ -54,9 +52,7 @@ services:
     command: >
       bash -c "
       set -e
-
       airflow db migrate
-
       airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com || true
       "
     restart: "no"
@@ -71,8 +67,11 @@ services:
       airflow-init:
         condition: service_completed_successfully
     restart: unless-stopped
+    networks:
+      - crime-net
+      - tunnelnet
 
-    # 4. AIRFLOW SCHEDULER
+  # 4. AIRFLOW SCHEDULER
   airflow-scheduler:
     <<: *airflow-common
     command: scheduler
@@ -81,9 +80,38 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
+  # 5. OFFICIAL GITHUB ACTIONS RUNNER (Customized)
+  deploy-agent:
+    build:
+      context: ./infra
+      dockerfile: runner.Dockerfile
+    restart: always
+    user: root
+    environment:
+      URL: "https://github.com/monitor-crime-talent-org/monitor-crime-and-talent"
+      TOKEN: "${RUNNER_TOKEN}"
+      RUNNER_NAME: "official-deploy-runner"
+      RUNNER_LABELS: "deploy,self-hosted"
+      RUNNER_ALLOW_RUNASROOT: "true"
+      # TCP is the only reliable way for Linux-to-Windows Docker control
+      DOCKER_HOST: "tcp://host.docker.internal:2375"
+    volumes:
+      - .:/home/runner/_work/monitor-crime-and-talent
+      - ./.env:/home/runner/_work/monitor-crime-and-talent/.env
+    # Use the provided startup script for the official runner
+    entrypoint: >
+      /bin/bash -c "
+      rm -f .runner .credentials .credentials_rsaparams .service;
+      ./config.sh --url $$URL --token $$TOKEN --name $$RUNNER_NAME --labels $$RUNNER_LABELS --unattended --replace && ./run.sh
+      "
+    networks:
+      - crime-net
+
 volumes:
   postgres_data:
 
 networks:
   crime-net:
     driver: bridge
+  tunnelnet:
+    external: true

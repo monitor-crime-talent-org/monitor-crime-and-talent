@@ -1,0 +1,23 @@
+name: Local Auto Deploy
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    # Only run on runners with the 'deploy' label
+    if: contains(github.event.head_commit.message, '') # Run on every push
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Ensure Docker Network Exists
+        run: |
+          docker network create tunnelnet || true
+
+      - name: Build and Restart Services
+        run: |
+          # Rebuild and restart ONLY the application services.
+          # This prevents the 'deploy-agent' from killing itself mid-deployment.
+          docker compose up -d --build postgres airflow-init airflow-webserver airflow-scheduler
