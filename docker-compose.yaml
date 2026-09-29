@@ -4,15 +4,17 @@ x-airflow-common: &airflow-common
   build:
     context: ./infra
     dockerfile: airflow.Dockerfile
-  user: "0:0"
   environment:
-    AIRFLOW_UID: "${AIRFLOW_UID}"
+    AIRFLOW_UID: "${AIRFLOW_UID:-50000}"
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow_meta
-    AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW__CORE__FERNET_KEY}"
-    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW__CORE__FERNET_KEY:?Set AIRFLOW__CORE__FERNET_KEY in .env}"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+    POSTGRES_USER: "${POSTGRES_USER:-crime_talent}"
+    POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-crime_talent}"
+    POSTGRES_DB: "${POSTGRES_DB:-crime_talent_db}"
   volumes:
     - ./dags:/opt/airflow/dags
     - ./data:/opt/airflow/data
@@ -31,16 +33,16 @@ services:
       context: ./infra
       dockerfile: postgres.Dockerfile
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: "${POSTGRES_USER:-crime_talent}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-crime_talent}"
+      POSTGRES_DB: "${POSTGRES_DB:-crime_talent_db}"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./infra/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "postgres"]
+      test: ["CMD", "pg_isready", "-U", "crime_talent", "-d", "crime_talent_db"]
       interval: 10s
       retries: 5
     networks:
@@ -49,12 +51,13 @@ services:
   # 2. AIRFLOW INIT
   airflow-init:
     <<: *airflow-common
-    command: >
-      bash -c "
-      set -e
-      airflow db migrate
-      airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com || true
-      "
+    command:
+      - bash
+      - -c
+      - |
+        set -e
+        airflow db migrate
+        airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com || true
     restart: "no"
 
   # 3. AIRFLOW WEBSERVER 
@@ -62,14 +65,13 @@ services:
     <<: *airflow-common
     command: webserver
     ports:
-      - "8080:8080"
+      - "8081:8080"
     depends_on:
       airflow-init:
         condition: service_completed_successfully
     restart: unless-stopped
     networks:
       - crime-net
-      - tunnelnet
 
   # 4. AIRFLOW SCHEDULER
   airflow-scheduler:
@@ -88,7 +90,7 @@ services:
     container_name: fastapi-backend
     restart: always
     environment:
-      DATABASE_URL: "postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+      DATABASE_URL: "postgresql+psycopg2://${POSTGRES_USER:-crime_talent}:${POSTGRES_PASSWORD:-crime_talent}@postgres:5432/${POSTGRES_DB:-crime_talent_db}"
     ports:
       - "8000:8000"
     depends_on:
@@ -130,5 +132,3 @@ volumes:
 networks:
   crime-net:
     driver: bridge
-  tunnelnet:
-    external: true
